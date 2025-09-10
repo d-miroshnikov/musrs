@@ -13,6 +13,6 @@ impl fmt::Display for FileNotFoundError {
 pub fn load_meta_from_path(path: &str) -> Result<Metadata, FileNotFoundError> {
     match metadata(&path) {
         Ok(meta) => Ok(meta),
-        Err(e) => Err(FileNotFoundError),
+        Err(_) => Err(FileNotFoundError),
     }
 }
