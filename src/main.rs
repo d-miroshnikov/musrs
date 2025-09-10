@@ -30,10 +30,9 @@ struct Cli {
 
 fn main() {
     let args = Cli::parse();
+
     let path = args.path;
-
     let metadata;
-
     match load_meta_from_path(&path) {
         Ok(meta) => metadata = meta,
         Err(e) => {
@@ -59,8 +58,8 @@ fn main() {
     // 4. options
 
     let music_time_bar_handler = MusicTimeBarHandler::new();
-    let audio_handler = SimpleAudioHandler::new(music_arr, music_time_bar_handler);
-    audio_handler.start();
+    let mut audio_handler = SimpleAudioHandler::new(music_arr, music_time_bar_handler);
+    let _ = audio_handler.start();
 
     loop {
         let mut input = String::new();
@@ -93,6 +92,14 @@ fn main() {
             },
             "stop" => {
                 break;
+            }
+            "clear" => match audio_handler.clear_history() {
+                Ok(()) => (),
+                Err(err) => {
+                    if err.is::<EmptyPlaylistError>() {
+                        println!("playlist is empty")
+                    }
+                }
             }
             _ => {
                 println!("Undefined command: {}", cmd);

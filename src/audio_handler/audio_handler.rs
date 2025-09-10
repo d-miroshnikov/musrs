@@ -1,5 +1,4 @@
 use std::{
-    env::current_exe,
     error::Error,
     fs::File,
     io,
@@ -10,7 +9,7 @@ use std::{
 
 use crossterm::{
     ExecutableCommand,
-    cursor::{MoveLeft, MoveUp, RestorePosition, SavePosition},
+    cursor::{MoveTo, RestorePosition, SavePosition, position},
     terminal::{Clear, ClearType},
 };
 use rodio::{Decoder, OutputStream, Sink};
@@ -75,7 +74,7 @@ impl SimpleAudioHandler {
         locked_player.set_volume(0.5);
     }
 
-    pub fn play(&self) -> Result<(), Box<dyn Error>> {
+    pub fn play(&mut self) -> Result<(), Box<dyn Error>> {
         let player = Arc::clone(&self.player);
         let locked_player = player.lock().unwrap();
 
@@ -85,6 +84,7 @@ impl SimpleAudioHandler {
 
         if locked_player.is_paused() {
             locked_player.play();
+            self.bar_control.play();
         } else {
             return Err(Box::new(TrackIsPlaying));
         }
@@ -92,7 +92,7 @@ impl SimpleAudioHandler {
         Ok(())
     }
 
-    pub fn pause(&self) -> Result<(), Box<dyn Error>> {
+    pub fn pause(&mut self) -> Result<(), Box<dyn Error>> {
         let player = Arc::clone(&self.player);
         let locked_player = player.lock().unwrap();
 
@@ -102,72 +102,117 @@ impl SimpleAudioHandler {
 
         if !locked_player.is_paused() {
             locked_player.pause();
+            self.bar_control.pause();
         } else {
             return Err(Box::new(TrackIsPaused));
         }
 
         Ok(())
     }
+
+    pub fn clear_history(&mut self) -> Result<(), Box<dyn Error>> {
+        self.bar_control.clear();
+
+        Ok(())
+    }
 }
 
 pub struct MusicTimeBarHandler {
-    state: String,
+    state: Arc<Mutex<String>>,
+    current_time: Arc<Mutex<u64>>,
 }
 
 impl MusicTimeBarHandler {
     pub fn new() -> Self {
         Self {
-            state: "play".to_string(),
+            state: Arc::new(Mutex::new("play".to_string())),
+            current_time: Arc::new(Mutex::new(0)),
         }
     }
 
     pub fn create_bar(&self, mit: &MusicInfoTemp) {
+        let state = Arc::clone(&self.state);
+        let current_time = Arc::clone(&self.current_time);
+
+        let duration = mit.duration;
+        let track_title = mit.title.clone();
         let bar_len = 50;
 
-        let state: String = self.state.clone();
-        let duration = mit.duration.clone();
-        let track_title = mit.title.clone();
-
-        println!("\n");
-
         thread::spawn(move || {
-            if state == "play" {
-                for i in 0..=duration {
-                    let percent = i as f32 / duration as f32;
-                    let filled_len = (bar_len as f32 * percent) as usize;
-                    let bar = "=".repeat(filled_len) + &"-".repeat(bar_len - filled_len);
+            io::stdout()
+                .execute(Clear(ClearType::FromCursorUp)).unwrap()
+                .execute(Clear(ClearType::FromCursorDown)).unwrap()
+                .execute(MoveTo(0, 11)).unwrap();
 
-                    io::stdout()
-                        .execute(SavePosition)
-                        .unwrap()
-                        .execute(MoveUp(3))
-                        .unwrap()
-                        .execute(MoveLeft(10000))
-                        .unwrap()
-                        .execute(Clear(ClearType::CurrentLine))
-                        .unwrap();
+            let formatted_duration = format_to_time(duration);
 
-                    println!(
-                        "Now playing {}\n\n[{}] {:>3}|{}",
-                        track_title,
-                        bar,
-                        format_to_time(i),
-                        format_to_time(duration)
-                    );
+            loop {
+                let is_playing = {
+                    let state_guard = state.lock().unwrap();
+                    *state_guard == "play"
+                };
 
-                    io::stdout().execute(RestorePosition).unwrap();
+                if is_playing {
+                    {
+                        let mut time_guard = current_time.lock().unwrap();
+
+                        if *time_guard > duration {
+                            break;
+                        }
+
+                        let percent = *time_guard as f32 / duration as f32;
+                        let filled_len = (bar_len as f32 * percent) as usize;
+                        let bar = "=".repeat(filled_len) + &"-".repeat(bar_len - filled_len);
+
+                        io::stdout()
+                            .execute(SavePosition).unwrap()
+                            .execute(MoveTo(0, 10)).unwrap()
+                            .execute(Clear(ClearType::CurrentLine)).unwrap()
+                            .execute(Clear(ClearType::FromCursorUp)).unwrap()
+                            .execute(MoveTo(0, 3)).unwrap();
+                        
+                        println!(
+                            "Now playing {}\n\n[{}] {:>3}|{}",
+                            track_title,
+                            bar,
+                            format_to_time(*time_guard),
+                            formatted_duration
+                        );
+
+                        io::stdout().execute(RestorePosition).unwrap();
+
+                        *time_guard += 1;
+                    }
+
                     thread::sleep(Duration::from_secs(1));
+                } else {
+                    thread::sleep(Duration::from_millis(50));
                 }
             }
         });
     }
 
-    pub fn play(&mut self) {
-        self.state = "play".to_string();
+    pub fn play(&self) {
+        let mut state_guard = self.state.lock().unwrap();
+        *state_guard = "play".to_string();
     }
 
-    pub fn pause(&mut self) {
-        self.state = "pause".to_string();
+    pub fn pause(&self) {
+        let mut state_guard = self.state.lock().unwrap();
+        *state_guard = "pause".to_string();
+    }
+
+    pub fn clear(&self) {
+        let current_pos = position().unwrap();
+
+        for y in 10..current_pos.1 {
+            io::stdout()
+                .execute(MoveTo(0, y)).unwrap()
+                .execute(Clear(ClearType::CurrentLine)).unwrap();
+        }
+
+        io::stdout()
+            .execute(MoveTo(0, 11)).unwrap();
     }
 }
 
