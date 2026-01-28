@@ -1,5 +1,5 @@
 # MusRS
-MusRS is simple command line music player with only 4 command's \
+MusRS is simple command line music player with only 4 command's
 
 ## Usage
 ```bash
