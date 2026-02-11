@@ -2,13 +2,17 @@ use std::{
     error::Error,
     fs::File,
     path::Path,
-    sync::{Arc, Mutex},
     time::Duration,
 };
 
-use rodio::{Decoder, OutputStream, Sink, Source};
+use rodio::{OutputStreamBuilder, OutputStream, Decoder, Sink, Source};
 
-use crate::audio_player::errors::{EmptyPlaylistError, TrackIsPaused, TrackIsPlaying};
+use crate::audio_player::errors::{
+    EmptyPlaylistError, 
+    TrackIsPaused, 
+    TrackIsPlaying,
+    CannotCreateSimpleAudioPlayer,
+};
 
 // --------------------------------------- //
 pub struct MusicInfoTemp {
@@ -79,25 +83,36 @@ pub struct SimpleAudioPlayer<T> {
     timebar: T,
     current_pos: i32,
     playlist: Vec<MusicInfoTemp>,
-    player: Arc<Mutex<Sink>>,
+    player: Sink,
     _stream: OutputStream,
     // queue: SourcesQueueOutput<f32>,
 }
 
-impl<T: Timebar> SimpleAudioPlayer<T> {
-    pub fn new(playlist: Vec<MusicInfoTemp>, timebar_impl: T) -> Self {
-        let (_stream, stream_handle) = OutputStream::try_default().unwrap();
-        let sink = Sink::try_new(&stream_handle).unwrap();
 
-        Self {
+
+impl<T: Timebar> SimpleAudioPlayer<T> {
+    pub fn new(playlist: Vec<MusicInfoTemp>, timebar_impl: T) -> Result<Self, CannotCreateSimpleAudioPlayer> {
+        let stream_handle_res = OutputStreamBuilder::open_default_stream();
+        
+        let output_stream = match stream_handle_res {
+            Ok(out_stream) => out_stream,
+            Err(_) => return Err(CannotCreateSimpleAudioPlayer),
+        };
+
+        let mixer = output_stream.mixer();
+        let sink = Sink::connect_new(mixer);
+
+        Ok(Self {
             timebar: timebar_impl,
             current_pos: 0,
             playlist,
-            player: Arc::new(Mutex::new(sink)),
-            _stream,
+            player: sink,
+            _stream: output_stream,
+            // player: Arc::new(Mutex::new(sink)),
             // queue,
-        }
+        })
     }
+
 
     pub fn start(&self) -> Result<(), Box<EmptyPlaylistError>> {
         let index = self.current_pos as usize;
@@ -113,25 +128,22 @@ impl<T: Timebar> SimpleAudioPlayer<T> {
     }
 
     pub fn add_track(&self, mit: &MusicInfoTemp) {
-        let player = Arc::clone(&self.player);
-        let locked_player = player.lock().unwrap();
+        let player = &self.player;
 
         let source = mit.get_source();
-
-        locked_player.append(source);
-        locked_player.set_volume(0.5);
+        player.append(source);
+        player.set_volume(0.5);
     }
 
     pub fn play(&mut self) -> Result<(), Box<dyn Error>> {
-        let player = Arc::clone(&self.player);
-        let locked_player = player.lock().unwrap();
+        let player = &self.player;
 
-        if locked_player.empty() {
+        if player.empty() {
             return Err(Box::new(EmptyPlaylistError));
         }
 
-        if locked_player.is_paused() {
-            locked_player.play();
+        if player.is_paused() {
+            player.play();
             self.timebar.play();
         } else {
             return Err(Box::new(TrackIsPlaying));
@@ -141,15 +153,14 @@ impl<T: Timebar> SimpleAudioPlayer<T> {
     }
 
     pub fn pause(&mut self) -> Result<(), Box<dyn Error>> {
-        let player = Arc::clone(&self.player);
-        let locked_player = player.lock().unwrap();
+        let player = &self.player;
 
-        if locked_player.empty() {
+        if player.empty() {
             return Err(Box::new(EmptyPlaylistError));
         }
 
-        if !locked_player.is_paused() {
-            locked_player.pause();
+        if !player.is_paused() {
+            player.pause();
             self.timebar.pause();
         } else {
             return Err(Box::new(TrackIsPaused));

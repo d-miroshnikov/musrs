@@ -3,8 +3,6 @@ pub mod formater;
 pub mod loaders;
 pub mod music_timebar;
 
-use daemonize::Daemonize;
-
 use std::{
     io::{self},
 };
@@ -50,12 +48,15 @@ fn main() {
     }
 
     let crossterm_music_timebar = CrosstermMusicTimebar::new();
-    let mut simple_audio_player = SimpleAudioPlayer::new(music_arr, crossterm_music_timebar);
-    let _ = simple_audio_player.start();
+    let mut simple_audio_player = match SimpleAudioPlayer::new(music_arr, crossterm_music_timebar) {
+        Ok(sap) => sap,
+        Err(e)=>{
+            println!("{}", e);
+            return;
+        } 
+    };
 
-    Daemonize::new()
-        .start()
-        .expect("Failed to daemonize");
+    let _ = simple_audio_player.start();
 
     loop {
         let mut input = String::new();
