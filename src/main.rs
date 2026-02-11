@@ -1,24 +1,25 @@
-pub mod audio_handler;
+pub mod audio_player;
 pub mod formater;
 pub mod loaders;
+pub mod music_timebar;
+
+use daemonize::Daemonize;
 
 use std::{
-    fs::File,
     io::{self},
-    path::Path,
-    time::Duration,
 };
 
 use clap::Parser;
-use rodio::{Decoder, Source};
 
 use crate::{
-    audio_handler::{
-        audio_handler::{MusicInfoTemp, MusicTimeBarHandler, SimpleAudioHandler},
+    audio_player::{
+        simple_audio_player::{MusicInfoTemp, SimpleAudioPlayer, Timebar},
         errors::{EmptyPlaylistError, TrackIsPaused, TrackIsPlaying},
     },
     loaders::load_meta_from_path::load_meta_from_path,
 };
+
+use crate::music_timebar::crossterm_music_timebar::CrosstermMusicTimebar;
 
 /// Search for a pattern in a file and display the lines that contain it.
 #[derive(Parser)]
@@ -43,32 +44,54 @@ fn main() {
 
     let mut music_arr: Vec<MusicInfoTemp> = Vec::new();
     if metadata.is_file() {
-        let music_info = get_music_info(&path);
+        let music_info = MusicInfoTemp::new(path.clone());
 
         music_arr.push(music_info);
     }
-    // is file or dir
-    // file - play only one track
-    // dir - play it like playlist
-    // add play/stop
-    // add some cmd:
-    // 1. next
-    // 2. prev
-    // 3. repeat
-    // 4. options
 
-    let music_time_bar_handler = MusicTimeBarHandler::new();
-    let mut audio_handler = SimpleAudioHandler::new(music_arr, music_time_bar_handler);
-    let _ = audio_handler.start();
+    let crossterm_music_timebar = CrosstermMusicTimebar::new();
+    let mut simple_audio_player = SimpleAudioPlayer::new(music_arr, crossterm_music_timebar);
+    let _ = simple_audio_player.start();
+
+    Daemonize::new()
+        .start()
+        .expect("Failed to daemonize");
 
     loop {
         let mut input = String::new();
         io::stdin().read_line(&mut input).unwrap();
 
-        let cmd = input.trim();
+        let input_parts: Vec<&str> = input.trim().split(" ").collect();
+        let cmd = input_parts[0];
+
         match cmd {
-            "add" => {}
-            "play" => match audio_handler.play() {
+            "add" => {
+                if input_parts.len() < 2 || input_parts.len() > 2 {
+                    println!("musrs: incorrect usage of «add». Example: musrs add ./path/to/track");
+                    continue;
+                }
+
+                let metadata;
+                let path_to_track = input_parts[1];
+                match load_meta_from_path(&path_to_track) {
+                    Ok(meta) => metadata = meta,
+                    Err(e) => {
+                        println!("{}", e);
+                        continue;
+                    }
+                }
+
+                if !metadata.is_file() {
+                    println!("musrs: provided path is not a file");
+                    continue;
+                }
+
+                let music_info = MusicInfoTemp::new(path.clone());
+                simple_audio_player.add_track(&music_info);
+
+                println!("musrs: Track {} successfully added", music_info.get_title());
+            }
+            "play" => match simple_audio_player.play() {
                 Ok(()) => (),
                 Err(err) => {
                     if err.is::<TrackIsPlaying>() {
@@ -79,7 +102,7 @@ fn main() {
                     }
                 }
             },
-            "pause" => match audio_handler.pause() {
+            "pause" => match simple_audio_player.pause() {
                 Ok(()) => (),
                 Err(err) => {
                     if err.is::<TrackIsPaused>() {
@@ -93,36 +116,19 @@ fn main() {
             "stop" => {
                 break;
             }
-            "clear" => match audio_handler.clear_history() {
+            "clear" => match simple_audio_player.clear_history() {
                 Ok(()) => (),
                 Err(err) => {
                     if err.is::<EmptyPlaylistError>() {
                         println!("playlist is empty")
                     }
                 }
-            }
+            },
             _ => {
                 println!("Undefined command: {}", cmd);
             }
         }
+
+        std::thread::sleep(std::time::Duration::from_secs(120));
     }
-}
-
-fn get_music_info(path: &str) -> MusicInfoTemp {
-    let file_name = Path::new(path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap();
-
-    let parts: Vec<&str> = file_name.split(".").collect();
-
-    let file = File::open(path).unwrap();
-    let source = Decoder::new(file).unwrap();
-    let duration: Duration = source.total_duration().unwrap();
-
-    return MusicInfoTemp {
-        path: path.to_string(),
-        title: parts[0].to_string(),
-        duration: duration.as_secs(),
-    };
 }
